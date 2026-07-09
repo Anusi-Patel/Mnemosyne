@@ -1,0 +1,17 @@
+# Secrets
+.streamlit/secrets.toml
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Chroma / local DB artifacts
+*.sqlite3
+chroma.db/
+
+# OS
+.DS_Store
