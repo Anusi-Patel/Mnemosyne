@@ -65,16 +65,23 @@ cd Mnemosyne
 pip install -r requirements.txt
 ```
 
-**2. Add your Groq API key**
+**2. Add your API keys**
 
-Get a free key at [console.groq.com](https://console.groq.com/keys), then
-either:
+You need two keys: Groq (for chat) and Gemini (for embeddings — used instead
+of ChromaDB's default local embedding model so indexing doesn't depend on
+downloading a model file, which can silently fail on restricted networks).
+
+- Groq: get a free key at [console.groq.com](https://console.groq.com/keys)
+- Gemini: get a free key at [aistudio.google.com](https://aistudio.google.com/apikey)
+
+Either:
 
 - Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and
-  paste in your key, **or**
-- Set it as an environment variable:
+  paste in both keys, **or**
+- Set them as environment variables:
   ```bash
-  export GROQ_API_KEY="your-key-here"
+  export GROQ_API_KEY="your-groq-key-here"
+  export GEMINI_API_KEY="your-gemini-key-here"
   ```
 
 **3. Run the app**

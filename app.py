@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 import chromadb
 from groq import Groq
+import google.generativeai as genai
 import streamlit as st
 
 # ==========================================
@@ -17,8 +18,95 @@ import streamlit as st
 # 4. SECURITY       — API key moved to st.secrets / env var. Never hardcode.
 # ==========================================
 
-st.set_page_config(page_title="Mnemosyne", page_icon="🧠", layout="wide")
-st.title("🧠 Mnemosyne: The Titan of Memory")
+st.set_page_config(page_title="Mnemosyne", page_icon="📜", layout="wide")
+
+# ==========================================
+# THEME — "The Archive": ink, parchment, and antique gold.
+# Fonts: Cinzel (inscription-style display, used sparingly for the title),
+# Spectral (book-like serif for body/chat text), JetBrains Mono (code).
+# ==========================================
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+html, body, [class*="css"] { font-family: 'Spectral', serif; }
+
+/* Title */
+h1 {
+    font-family: 'Cinzel', serif !important;
+    letter-spacing: 0.04em;
+    color: #e9e3d3 !important;
+    border-bottom: 1px solid #b8923f55;
+    padding-bottom: 0.6rem;
+}
+.mnemosyne-tagline {
+    font-family: 'Spectral', serif;
+    font-style: italic;
+    color: #9aa3b0;
+    margin-top: -0.8rem;
+    margin-bottom: 1.4rem;
+    font-size: 0.95rem;
+}
+
+/* Sidebar reads like a ledger */
+section[data-testid="stSidebar"] {
+    background-color: #1b212b;
+    border-right: 1px solid #b8923f33;
+}
+section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
+    font-family: 'Cinzel', serif !important;
+    color: #b8923f !important;
+    font-size: 1.05rem !important;
+    letter-spacing: 0.03em;
+}
+
+/* Chat messages — inscribed tablet look */
+div[data-testid="stChatMessage"] {
+    background-color: #1e2530;
+    border-top: 2px solid #b8923f;
+    border-radius: 4px;
+    padding: 0.35rem 0.9rem;
+    margin-bottom: 0.6rem;
+}
+div[data-testid="stChatMessage"] p, div[data-testid="stChatMessage"] li {
+    font-family: 'Spectral', serif;
+    color: #e9e3d3;
+    line-height: 1.55;
+}
+div[data-testid="stChatMessage"] code {
+    font-family: 'JetBrains Mono', monospace;
+    color: #7fb8b6;
+    background-color: #12161d;
+}
+
+/* Buttons */
+.stButton button {
+    font-family: 'Cinzel', serif;
+    letter-spacing: 0.03em;
+    background-color: #b8923f;
+    color: #161b24;
+    border: none;
+    border-radius: 3px;
+}
+.stButton button:hover {
+    background-color: #cba553;
+    color: #161b24;
+}
+
+/* Sources / footer — stamped seal feel */
+.mnemosyne-sources {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: #7fb8b6;
+    border-left: 2px solid #4a7a78;
+    padding-left: 0.6rem;
+    margin-top: 0.5rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🧠 Mnemosyne")
+st.markdown('<p class="mnemosyne-tagline">The Titan of Memory — ask your codebase anything, in plain English.</p>', unsafe_allow_html=True)
 
 # ==========================================
 # UPGRADE 4 — API key from environment
@@ -29,6 +117,37 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", 
 if not GROQ_API_KEY:
     st.error("GROQ_API_KEY not found. Set it as an environment variable or in .streamlit/secrets.toml")
     st.stop()
+
+# ==========================================
+# BUGFIX — Embeddings via Gemini API instead of ChromaDB's default
+# ChromaDB's built-in embedding function downloads an ONNX model from
+# Hugging Face on first run. This silently hangs/fails on restricted
+# corporate networks (same issue hit in StoryWeaver). Using Gemini's
+# text-embedding-004 API instead means no local model download at all —
+# just an HTTPS call, same as the chat requests already being made.
+# ==========================================
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    st.error("GEMINI_API_KEY not found. Set it as an environment variable or in .streamlit/secrets.toml")
+    st.stop()
+genai.configure(api_key=GEMINI_API_KEY)
+
+
+class GeminiEmbeddingFunction(chromadb.EmbeddingFunction):
+    """Chroma-compatible embedding function backed by Gemini's embedding API."""
+
+    def __call__(self, input: chromadb.Documents) -> chromadb.Embeddings:
+        embeddings = []
+        for text in input:
+            # Cap overly long chunks defensively; our chunks are 30 lines so
+            # this is just a safety net, not expected to trigger normally.
+            result = genai.embed_content(
+                model="models/text-embedding-004",
+                content=text[:8000],
+                task_type="retrieval_document",
+            )
+            embeddings.append(result["embedding"])
+        return embeddings
 
 # ==========================================
 # UPGRADE 2 — Supported file extensions
@@ -140,7 +259,10 @@ def init_engines():
         db.delete_collection("mnemosyne_ui")
     except Exception:
         pass
-    collection = db.create_collection(name="mnemosyne_ui")
+    collection = db.create_collection(
+        name="mnemosyne_ui",
+        embedding_function=GeminiEmbeddingFunction(),
+    )
     return llm, collection
 
 llm_client, collection = init_engines()
@@ -289,7 +411,7 @@ def _clone_and_index(repo_url: str, branch: str):
 # Sidebar — two tabs: Local Folder / GitHub URL
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("📖 Open the Archive")
 
     tab_local, tab_github = st.tabs(["📁 Local Folder", "🐙 GitHub URL"])
 
@@ -330,7 +452,7 @@ else:
     # Render history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            st.markdown(msg["content"], unsafe_allow_html=True)
 
     if user_query := st.chat_input("Ask a question or say 'Create a file called X that does Y'…"):
 
@@ -342,7 +464,16 @@ else:
             with st.spinner("Searching the codebase…"):
 
                 # UPGRADE 1 — retrieve 5 chunks (was 3) for richer context
-                results = collection.query(query_texts=[user_query], n_results=5)
+                # Embed the query with task_type="retrieval_query" (not the
+                # "retrieval_document" type used for indexed code) — Gemini
+                # tunes these differently, and using the matching type
+                # improves match quality for asymmetric search like this.
+                query_embedding = genai.embed_content(
+                    model="models/text-embedding-004",
+                    content=user_query,
+                    task_type="retrieval_query",
+                )["embedding"]
+                results = collection.query(query_embeddings=[query_embedding], n_results=5)
 
                 context = ""
                 sources = []
@@ -409,16 +540,20 @@ CODEBASE CONTEXT (top 5 most relevant chunks):
                 footer_parts = []
                 if sources:
                     unique_sources = sorted(set(sources))
-                    footer_parts.append(f"*Sources: {', '.join(unique_sources)}*")
+                    footer_parts.append(
+                        f'<div class="mnemosyne-sources">📜 Consulted: {", ".join(unique_sources)}</div>'
+                    )
                 if created_files:
-                    file_list = "\n".join(f"- `{f}`" for f in created_files)
-                    footer_parts.append(f"**Files created:**\n{file_list}")
+                    file_list = "".join(f"<div>— {f}</div>" for f in created_files)
+                    footer_parts.append(
+                        f'<div class="mnemosyne-sources">✒️ Files inscribed:{file_list}</div>'
+                    )
 
                 full_answer = response_text
                 if footer_parts:
-                    full_answer += "\n\n---\n" + "\n\n".join(footer_parts)
+                    full_answer += "\n\n" + "".join(footer_parts)
 
-                st.markdown(full_answer)
+                st.markdown(full_answer, unsafe_allow_html=True)
                 st.session_state.messages.append(
                     {"role": "assistant", "content": full_answer}
                 )
