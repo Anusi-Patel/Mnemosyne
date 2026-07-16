@@ -1,5 +1,5 @@
 streamlit
 chromadb
 groq
-sentence-transformers
+google-generativeai
 numpy
